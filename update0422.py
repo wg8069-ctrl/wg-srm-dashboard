@@ -14,28 +14,30 @@ def load_data():
     plan_file = next((f for f in all_excel if "排程" in f), None)
 
     if not srm_file or not plan_file:
-        st.error(f"❌ 讀取失敗！目錄下的檔案：{all_excel}")
+        st.error(f"❌ 讀取失敗！目錄下缺少檔案。")
         return pd.DataFrame()
 
-    # 2. 讀取排程 (改用關鍵字找欄位，避免 index out-of-bounds)
-    df_p = pd.read_excel(plan_file, engine='openpyxl')
+    # 2. 讀取排程 (強制不讀取標題，直接數格子)
+    # 使用 header=None 是因為您的截圖顯示第一列沒有欄位名稱
+    df_p = pd.read_excel(plan_file, engine='openpyxl', header=None)
     
-    # 自動尋找關鍵欄位名稱
-    col_map_p = {
-        '料號': next((c for c in df_p.columns if '料號' in str(c) or '料件編號' in str(c)), None),
-        '訂單量': next((c for c in df_p.columns if '訂單量' in str(c) or '採購數量' in str(c) or '數量' in str(c)), None),
-        '上線日': next((c for c in df_p.columns if '日期' in str(c) or '上線' in str(c) or '開工' in str(c)), None)
-    }
-
-    # 如果關鍵字找不到，改用預設位置 (G=6, K=10, M=12)
-    col_no = col_map_p['料號'] if col_map_p['料號'] else df_p.columns[10]
-    col_qty = col_map_p['訂單量'] if col_map_p['訂單量'] else df_p.columns[6]
-    col_date = col_map_p['上線日'] if col_map_p['上線日'] else df_p.columns[12]
-
-    df_main = df_p[[col_no, col_qty, col_date]].copy()
-    df_main.columns = ['料件編號[*]', '訂單量', '生產上線日']
-    df_main['生產上線日'] = pd.to_datetime(df_main['生產上線日'], errors='coerce')
-    df_main = df_main.groupby('料件編號[*]').agg({'訂單量': 'sum', '生產上線日': 'min'}).reset_index()
+    # 根據圖片位置：G欄=6, K欄=10, M欄=12
+    try:
+        df_main = df_p.iloc[:, [10, 6, 12]].copy()
+        df_main.columns = ['料件編號[*]', '訂單量', '生產上線日']
+        
+        # 清理資料：確保訂單量是數字，日期是日期
+        df_main['訂單量'] = pd.to_numeric(df_main['訂單量'], errors='coerce').fillna(0)
+        df_main['生產上線日'] = pd.to_datetime(df_main['生產上線日'], errors='coerce')
+        
+        # 過濾掉料號為空的無效列
+        df_main = df_main.dropna(subset=['料件編號[*]'])
+        
+        # 彙總：同料號加總數量，取最早日期
+        df_main = df_main.groupby('料件編號[*]').agg({'訂單量': 'sum', '生產上線日': 'min'}).reset_index()
+    except Exception as e:
+        st.error(f"❌ 解析排程表失敗（可能是欄位不足）：{e}")
+        return pd.DataFrame()
 
     # 3. 讀取進料 (ASN)
     df_s = pd.read_excel(srm_file, engine='openpyxl')
@@ -69,12 +71,18 @@ def load_data():
         if row['未交數量'] <= 0: return "✅ 已結案"
         if pd.notnull(row.get('生產上線日')) and pd.notnull(row.get('完工日')):
             if row['完工日'] > row['生產上線日']: return "❌ 警報：晚於生產日"
-        days_diff = (pd.to_datetime(row.get('完工日')) - today).days if pd.notnull(row.get('完工日')) else 999
-        if days_diff < 0: return "🔴 已逾期"
+        
+        # 判斷逾期
+        date_for_check = row.get('完工日') if pd.notnull(row.get('完工日')) else row.get('生產上線日')
+        if pd.notnull(date_for_check) and date_for_check < today:
+            return "🔴 已逾期"
         return "🟢 正常待料"
 
     df['即時狀態'] = df.apply(check_status, axis=1)
-    return df[['即時狀態', '生產上線日', '完工日', '料件編號[*]', '物料名稱[*]', '規格[*]', '訂單量', '已交量', '未交數量']]
+    
+    # 最終顯示
+    keep = ['即時狀態', '生產上線日', '完工日', '訂單編號[*]', '供應商名稱[*]', '料件編號[*]', '物料名稱[*]', '規格[*]', '訂單量', '已交量', '未交數量']
+    return df[[c for c in keep if c in df.columns]]
 
 # --- 介面 ---
 st.title("📊 3003 生活館 - 跨檔案整合看板")
@@ -83,5 +91,7 @@ try:
     data = load_data()
     if not data.empty:
         st.dataframe(data.sort_values("即時狀態", ascending=False), use_container_width=True, hide_index=True)
+    else:
+        st.info("等待資料讀取中...")
 except Exception as e:
     st.error(f"系統運行錯誤：{e}")
