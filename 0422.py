@@ -9,21 +9,16 @@ st.set_page_config(page_title="SRM 進料戰情看板", layout="wide")
 
 @st.cache_data
 def load_data():
-    # 1. 自動偵測檔案：尋找所有「訂單資訊-*.xlsx」的檔案
-    # 它會自動找目前的資料夾
+    # 找到最新的 Excel 檔
     file_pattern = "訂單資訊*.xls*" 
     files = glob.glob(file_pattern)
-    
     if not files:
-        st.error("❌ 找不到任何『訂單資訊』開頭的 Excel 檔案，請確認檔案是否放在同一個資料夾。")
         return pd.DataFrame()
-
-    # 2. 如果有多個檔案，自動抓取「最新修改」的那一個（防止讀到舊的下載檔）
-    latest_file = max(files, key=os.path.getmtime)
-    st.info(f"📅 目前偵測到最新檔案：{latest_file}")
     
-    # 3. 讀取資料
-    df = pd.read_excel(latest_file)
+    latest_file = max(files, key=os.path.getmtime)
+    
+    # 關鍵修改：明確指定 engine='openpyxl'
+    df = pd.read_excel(latest_file, engine='openpyxl')
 
     # 4. 【套用 VBA 邏輯】刪除已作廢
     # 對應 VBA: If Trim(wsSrc.Cells(i, "C").Value) = "已作廢" Then wsSrc.Rows(i).Delete
