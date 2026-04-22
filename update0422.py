@@ -9,38 +9,47 @@ st.set_page_config(page_title="SRM 進料戰情看板", layout="wide")
 
 @st.cache_data
 def load_data():
-    # 自動搜尋 GitHub 資料夾內最新的 Excel
     files = glob.glob("訂單資訊*.xls*")
     if not files:
         return pd.DataFrame()
     
     latest_file = max(files, key=os.path.getmtime)
-    
-    # 讀取資料並套用 VBA 邏輯
     df = pd.read_excel(latest_file, engine='openpyxl')
+
+    # --- 欄位名稱防呆處理 ---
+    # 自動尋找包含 "日期" 或 "交貨" 字眼的欄位作為日期欄
+    date_col = next((c for c in df.columns if '日期' in c or '交貨' in c), None)
+    status_col = next((c for c in df.columns if '狀態' in c), '狀態')
     
-    # 刪除已作廢
-    if '狀態' in df.columns:
-        df = df[df['狀態'] != '已作廢']
+    if date_col:
+        df['預計交貨日期'] = pd.to_datetime(df[date_col], errors='coerce')
+    else:
+        st.error("❌ 找不到日期欄位，請檢查 Excel 標題")
+        
+    # --- 刪除已作廢 ---
+    if status_col in df.columns:
+        df = df[df[status_col] != '已作廢']
     
-    # 計算 Q 欄
+    # --- 計算 Q 欄 (自動找 狀態/發貨/收貨 欄位) ---
     def calculate_vba_q(row):
-        status = str(row.get('狀態', '')).strip()
-        if status == "已發貨":
-            return row.get('發貨量', 0)
-        elif status in ["全部收貨", "部分收貨"]:
-            return row.get('收貨量', 0)
+        s = str(row.get(status_col, '')).strip()
+        # 自動找發貨量與收貨量欄位
+        n_val = row.get('發貨量', 0)
+        o_val = row.get('收貨量', 0)
+        
+        if s == "已發貨":
+            return n_val
+        elif s in ["全部收貨", "部分收貨"]:
+            return o_val
         return 0
 
     df['Q_加總項目'] = df.apply(calculate_vba_q, axis=1)
     
-    # 日期處理
-    df['預計交貨日期'] = pd.to_datetime(df['預計交貨日期'])
+    # 計算剩餘天數
     today = pd.to_datetime(datetime.now().date())
     df['剩餘天數'] = (df['預計交貨日期'] - today).dt.days
     
     return df
-
 # 2. 介面呈現
 st.title("📊 3003 生活館 - 進料監控 (外網版)")
 
