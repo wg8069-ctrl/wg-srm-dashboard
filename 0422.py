@@ -18,7 +18,8 @@ def load_data():
     latest_file = max(files, key=os.path.getmtime)
     
     # 關鍵修改：明確指定 engine='openpyxl'
-    df = pd.read_excel(latest_file, engine='openpyxl')
+   df = pd.read_excel(latest_file, engine='openpyxl') 
+    return df
 
     # 4. 【套用 VBA 邏輯】刪除已作廢
     # 對應 VBA: If Trim(wsSrc.Cells(i, "C").Value) = "已作廢" Then wsSrc.Rows(i).Delete
