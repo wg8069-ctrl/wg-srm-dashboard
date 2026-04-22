@@ -4,39 +4,41 @@ import glob
 import os
 from datetime import datetime
 
-st.set_page_config(page_title="SRM進料x生產排程監控", layout="wide")
+st.set_page_config(page_title="SRM進料x生產排程整合", layout="wide")
 
 @st.cache_data
 def load_data():
-    # 1. 寬鬆搜尋檔案 (只要檔名包含 '訂單' 或 '排程' 且是 excel 就抓)
+    # 1. 搜尋檔案
     all_excel = glob.glob("*.xls*")
-    
-    srm_file = None
-    plan_file = None
-    
-    for f in all_excel:
-        if "訂單" in f:
-            srm_file = f
-        if "排程" in f:
-            plan_file = f
+    srm_file = next((f for f in all_excel if "訂單" in f), None)
+    plan_file = next((f for f in all_excel if "排程" in f), None)
 
-    # 偵錯：如果還是找不到，直接列出清單
     if not srm_file or not plan_file:
-        st.error(f"❌ 讀取失敗！目前目錄下的 Excel 有：{all_excel}")
-        st.info("請檢查 GitHub 上的檔案名稱是否包含 '訂單' 或 '排程' 關鍵字。")
+        st.error(f"❌ 讀取失敗！目錄下的檔案：{all_excel}")
         return pd.DataFrame()
 
-    # 2. 讀取排程 (基準)
-    df_plan_raw = pd.read_excel(plan_file, engine='openpyxl')
+    # 2. 讀取排程 (改用關鍵字找欄位，避免 index out-of-bounds)
+    df_p = pd.read_excel(plan_file, engine='openpyxl')
     
-    # 根據您的排程表位置：K欄(10)料號, G欄(6)訂單量, M欄(12)上線日期
-    df_main = df_plan_raw.iloc[:, [10, 6, 12]].copy()
+    # 自動尋找關鍵欄位名稱
+    col_map_p = {
+        '料號': next((c for c in df_p.columns if '料號' in str(c) or '料件編號' in str(c)), None),
+        '訂單量': next((c for c in df_p.columns if '訂單量' in str(c) or '採購數量' in str(c) or '數量' in str(c)), None),
+        '上線日': next((c for c in df_p.columns if '日期' in str(c) or '上線' in str(c) or '開工' in str(c)), None)
+    }
+
+    # 如果關鍵字找不到，改用預設位置 (G=6, K=10, M=12)
+    col_no = col_map_p['料號'] if col_map_p['料號'] else df_p.columns[10]
+    col_qty = col_map_p['訂單量'] if col_map_p['訂單量'] else df_p.columns[6]
+    col_date = col_map_p['上線日'] if col_map_p['上線日'] else df_p.columns[12]
+
+    df_main = df_p[[col_no, col_qty, col_date]].copy()
     df_main.columns = ['料件編號[*]', '訂單量', '生產上線日']
     df_main['生產上線日'] = pd.to_datetime(df_main['生產上線日'], errors='coerce')
     df_main = df_main.groupby('料件編號[*]').agg({'訂單量': 'sum', '生產上線日': 'min'}).reset_index()
 
     # 3. 讀取進料 (ASN)
-    df_srm = pd.read_excel(srm_file, engine='openpyxl')
+    df_s = pd.read_excel(srm_file, engine='openpyxl')
     
     def calc_delivered(row):
         status = str(row.get('出貨狀態', '')).strip()
@@ -46,8 +48,8 @@ def load_data():
         elif status in ["部分收貨", "全部收貨"]: return recv_val
         return 0
     
-    df_srm['計算後已交'] = df_srm.apply(calc_delivered, axis=1)
-    df_srm_agg = df_srm.groupby('料件編號[*]').agg({
+    df_s['計算後已交'] = df_s.apply(calc_delivered, axis=1)
+    df_s_agg = df_s.groupby('料件編號[*]').agg({
         '訂單編號[*]': 'first',
         '供應商名稱[*]': 'first',
         '物料名稱[*]': 'first',
@@ -55,10 +57,10 @@ def load_data():
         '計算後已交': 'sum',
         '發貨日期[*]': 'max'
     }).reset_index()
-    df_srm_agg.rename(columns={'發貨日期[*]': '完工日'}, inplace=True)
+    df_s_agg.rename(columns={'發貨日期[*]': '完工日'}, inplace=True)
 
     # 4. 合併與計算
-    df = pd.merge(df_main, df_srm_agg, on='料件編號[*]', how='left')
+    df = pd.merge(df_main, df_s_agg, on='料件編號[*]', how='left')
     df['已交量'] = df['計算後已交'].fillna(0)
     df['未交數量'] = df['訂單量'] - df['已交量']
     
@@ -72,27 +74,14 @@ def load_data():
         return "🟢 正常待料"
 
     df['即時狀態'] = df.apply(check_status, axis=1)
-    
-    # 最終顯示欄位
-    keep = ['即時狀態', '生產上線日', '完工日', '料件編號[*]', '物料名稱[*]', '規格[*]', '訂單量', '已交量', '未交數量']
-    return df[keep]
+    return df[['即時狀態', '生產上線日', '完工日', '料件編號[*]', '物料名稱[*]', '規格[*]', '訂單量', '已交量', '未交數量']]
 
 # --- 介面 ---
-st.title("📊 3003 生活館 - 進料 x 排程整合看板")
+st.title("📊 3003 生活館 - 跨檔案整合看板")
 
 try:
-    df = load_data()
-    if not df.empty:
-        c1, c2, c3 = st.columns(3)
-        c1.metric("❌ 影響生產", len(df[df['即時狀態'] == "❌ 警報：晚於生產日"]))
-        c2.metric("🔴 逾期未到", len(df[df['即時狀態'] == "🔴 已逾期"]))
-        c3.metric("📑 追蹤項次", len(df))
-
-        q = st.text_input("🔍 搜尋 (供應商/料號/單號)", "")
-        if q:
-            mask = df.apply(lambda r: r.astype(str).str.contains(q, case=False).any(), axis=1)
-            df = df[mask]
-        
-        st.dataframe(df.sort_values("即時狀態", ascending=False), use_container_width=True, hide_index=True)
+    data = load_data()
+    if not data.empty:
+        st.dataframe(data.sort_values("即時狀態", ascending=False), use_container_width=True, hide_index=True)
 except Exception as e:
     st.error(f"系統運行錯誤：{e}")
