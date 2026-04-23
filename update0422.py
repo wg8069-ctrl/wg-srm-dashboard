@@ -87,7 +87,7 @@ def load_srm_excel():
     }).reset_index()
 
 # --- 介面呈現 ---
-st.title("📊 3003 生活館 - ERP(TA011) x 進料核對系統")
+st.title("進料核對系統")
 
 df_erp = fetch_erp_actual_data()
 df_srm = load_srm_excel()
