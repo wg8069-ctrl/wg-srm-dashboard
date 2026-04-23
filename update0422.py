@@ -7,7 +7,7 @@ from datetime import datetime
 
 # --- 黃課長請填入您的 ERP 連線資訊 ---
 DB_CONFIG = {
-    'server': '192.168.1.50',
+    'server': '192.168.1.50:1433',
     'user': 'sa',
     'password': 'dsc@80690891',
     'database': 'WG'
